@@ -1,0 +1,71 @@
+name: Unified Attachments Pipeline
+
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: unified-attachments-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps (requests / Pillow)
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests Pillow
+
+      - name: Run unified pipeline (reorder + verify)
+        id: unify
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_API_URL: https://api.github.com
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          SIGNATURE_SALT: ${{ secrets.SIGNATURE_SALT }}   # ← 必ず有効行にする
+        run: |
+          set -euo pipefail
+          set +e
+          python unified_attachments_pipeline.py
+          rc=$?
+          set -e
+          echo "unified_exit_code=$rc"
+          if [ "$rc" -eq 0 ]; then
+            echo "verification_result=success" >> "$GITHUB_OUTPUT"
+          elif [ "$rc" -eq 2 ]; then
+            echo "verification_result=skipped" >> "$GITHUB_OUTPUT"
+          else
+            echo "verification_result=failure" >> "$GITHUB_OUTPUT"
+          fi
+          echo "verification_exit_code=$rc" >> "$GITHUB_OUTPUT"
+
+      - name: Finalize issue state
+        if: always()
+        env:
+          VERIFICATION_RESULT: ${{ steps.unify.outputs.verification_result }}
+          VERIFICATION_EXIT_CODE: ${{ steps.unify.outputs.verification_exit_code }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_API_URL: https://api.github.com
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          python finalize_issue.py

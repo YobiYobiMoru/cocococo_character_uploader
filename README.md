@@ -1,0 +1,2 @@
+# cocococo_character_uploader
+ここここのキャラクター共有用リポジトリです。
